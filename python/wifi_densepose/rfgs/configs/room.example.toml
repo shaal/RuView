@@ -1,0 +1,34 @@
+# RFGS RoomConfig (ADR-125) — node geometry + channel plan for a 4-node mesh.
+#
+# Positions are in metres, room-centred. tx_node_id selects the transmitter;
+# every other node is a receiver (GSRF fixed-TX / many-RX). orientation is an
+# optional unit quaternion (w, x, y, z), default (1,0,0,0) = identity.
+
+bounds_min = [-3.0, 0.0, -3.0]
+bounds_max = [3.0, 3.0, 3.0]
+bandwidth_mhz = 20.0
+tx_node_id = 0
+
+[[nodes]]
+node_id = 0
+position = [-2.0, 1.0, -2.0]
+channel = 6
+n_antennas = 1
+
+[[nodes]]
+node_id = 1
+position = [2.0, 1.0, -2.0]
+channel = 6
+n_antennas = 1
+
+[[nodes]]
+node_id = 2
+position = [2.0, 1.0, 2.0]
+channel = 6
+n_antennas = 1
+
+[[nodes]]
+node_id = 3
+position = [-2.0, 1.0, 2.0]
+channel = 6
+n_antennas = 1

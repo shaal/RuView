@@ -7,7 +7,7 @@ use crate::depth;
 use crate::fusion;
 use crate::pointcloud;
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::{HeaderValue, Method},
     response::Html,
     routing::get,
@@ -22,6 +22,16 @@ struct AppState {
     latest_pipeline: Mutex<Option<csi_pipeline::PipelineOutput>>,
     frame_count: Mutex<u64>,
     use_camera: bool,
+    /// Optional baked RF Gaussian field (ADR-125). Loaded once at startup from
+    /// `RUVIEW_RFGS_FIELD` (a splats-v2 JSON). When present, `/api/splats?schema=rfgs-v2`
+    /// serves the learned anisotropic field instead of the live v1 splats.
+    rfgs_field: Option<Arc<wifi_densepose_rfgs::RfgsField>>,
+}
+
+/// Query string for `/api/splats`. `schema=rfgs-v2` selects the baked RF field.
+#[derive(serde::Deserialize)]
+struct SplatsQuery {
+    schema: Option<String>,
 }
 
 /// Start the HTTP/viewer server bound to `bind` (e.g.
@@ -45,12 +55,27 @@ pub async fn serve(bind: &str, _brain: Option<&str>) -> anyhow::Result<()> {
     };
     let initial_splats = pointcloud::to_gaussian_splats(&initial_cloud);
 
+    // Optionally load a baked RF Gaussian field (ADR-125) for the v2 splats branch.
+    let rfgs_field = std::env::var("RUVIEW_RFGS_FIELD").ok().and_then(|p| {
+        match wifi_densepose_rfgs::RfgsField::load(&p) {
+            Ok(f) => {
+                eprintln!("  RFGS: loaded baked field from {p} ({} Gaussians)", f.len());
+                Some(Arc::new(f))
+            }
+            Err(e) => {
+                eprintln!("  RFGS: failed to load {p}: {e} (serving v1 splats only)");
+                None
+            }
+        }
+    });
+
     let state = Arc::new(AppState {
         latest_cloud: Mutex::new(initial_cloud),
         latest_splats: Mutex::new(initial_splats),
         latest_pipeline: Mutex::new(None),
         frame_count: Mutex::new(0),
         use_camera: has_camera,
+        rfgs_field,
     });
 
     // Background: capture + fuse every 500ms (motion-adaptive)
@@ -221,7 +246,24 @@ async fn api_cloud(State(state): State<Arc<AppState>>) -> Json<serde_json::Value
     }))
 }
 
-async fn api_splats(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+async fn api_splats(
+    Query(q): Query<SplatsQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    // v2 branch (ADR-125): serve the baked anisotropic RF field if requested and present.
+    if q.schema.as_deref() == Some("rfgs-v2") {
+        if let Some(field) = &state.rfgs_field {
+            return Json(serde_json::json!({
+                "schema": "rfgs-v2",
+                "count": field.len(),
+                "n_radiance_coeffs": field.n_radiance_coeffs(),
+                "splats": field.splats(),
+                "timestamp": chrono::Utc::now().timestamp_millis(),
+            }));
+        }
+        // Requested v2 but none loaded — fall through to v1 (backward compatible).
+    }
+
     let splats = state.latest_splats.lock().unwrap();
     let frames = *state.frame_count.lock().unwrap();
     let pipeline = state.latest_pipeline.lock().unwrap();

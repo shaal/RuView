@@ -25,6 +25,9 @@ members = [
     "crates/wifi-densepose-ruvector",
     "crates/wifi-densepose-desktop",
     "crates/wifi-densepose-pointcloud",
+    # ADR-125: RFGS edge-query — loads a baked RF Gaussian Splatting field
+    # (splats-v2 JSON) and serves/queries it for the /api/splats v2 branch.
+    "crates/wifi-densepose-rfgs",
     "crates/wifi-densepose-geo",
     "crates/nvsim",
     "crates/nvsim-server",

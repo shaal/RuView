@@ -14,6 +14,7 @@ Dual codebase: Python v1 (`v1/`) and Rust port (`v2/`).
 | `wifi-densepose-mat` | Mass Casualty Assessment Tool — disaster survivor detection |
 | `wifi-densepose-hardware` | ESP32 aggregator, TDM protocol, channel hopping firmware |
 | `wifi-densepose-ruvector` | RuVector v2.0.4 integration + cross-viewpoint fusion (5 modules) |
+| `wifi-densepose-rfgs` | RFGS edge-query (ADR-125) — loads a baked RF Gaussian Splatting field (splats-v2) and serves/queries it for `/api/splats?schema=rfgs-v2` |
 | `wifi-densepose-wasm` | WebAssembly bindings for browser deployment |
 | `wifi-densepose-cli` | CLI tool (`wifi-densepose` binary) |
 | `wifi-densepose-sensing-server` | Lightweight Axum server for WiFi sensing UI |

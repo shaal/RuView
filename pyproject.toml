@@ -154,6 +154,14 @@ gpu = [
     "nvidia-ml-py>=12.535.0",
 ]
 
+# RFGS — RF Gaussian Splatting room reconstruction (ADR-125). Training runs on
+# a GPU host with the pure-PyTorch reference backend; the optional GSRF CUDA
+# tracer is installed separately. The core wheel does not require these.
+rfgs = [
+    "torch>=2.1.0",
+    "numpy>=1.24.0",
+]
+
 monitoring = [
     "grafana-api>=1.0.3",
     "influxdb-client>=1.38.0",

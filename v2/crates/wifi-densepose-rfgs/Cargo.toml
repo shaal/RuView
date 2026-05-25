@@ -1,0 +1,10 @@
+[package]
+name = "wifi-densepose-rfgs"
+version = "0.3.0"
+edition = "2021"
+description = "RFGS edge-query: load a baked RF Gaussian Splatting field (splats-v2) and serve/query it (ADR-125)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }

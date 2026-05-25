@@ -965,7 +965,8 @@ Open `http://localhost:9880` for the interactive Three.js 3D viewer.
 | `/health` | GET | `{"status": "ok"}` |
 | `/api/status` | GET | Camera, CSI, pipeline state, vitals, motion |
 | `/api/cloud` | GET | Point cloud (up to 1000 points) + pipeline data |
-| `/api/splats` | GET | Gaussian splats for Three.js rendering |
+| `/api/splats` | GET | Gaussian splats for Three.js rendering (v1) |
+| `/api/splats?schema=rfgs-v2` | GET | Baked **RF Gaussian Splatting** field (ADR-125) when `RUVIEW_RFGS_FIELD` is set — adds per-splat `rotation` + `radiance`; falls back to v1 otherwise |
 | `/` | GET | Interactive Three.js 3D viewer |
 
 ### Training
@@ -995,6 +996,39 @@ ruview-pointcloud capture --frames 20 --output room_model.ply
 ```
 
 Result: 40,000+ voxels at 5cm resolution, 12,000+ Gaussian splats.
+
+### RF Gaussian Splatting — camera-free room reconstruction (ADR-125)
+
+Unlike the deep room scan (which uses the **camera** for geometry), RFGS
+reconstructs the room from **WiFi CSI alone** by optimizing complex-valued 3D
+Gaussians whose implied radio radiance field reproduces the CSI your ESP32 mesh
+measured. Training runs on a GPU host (the ESP32 nodes only relay CSI); the
+baked field is then served to the edge viewer.
+
+```bash
+# 1. Install the training extra (GPU host)
+pip install "wifi-densepose[rfgs]"
+
+# 2. Verify the pipeline end-to-end with no hardware/GPU (synthetic self-test):
+python -m wifi_densepose.rfgs.train --synthetic --steps 800 --out ./rfgs_out
+#    -> AC3: held-out CSI reconstruction improves >= 50%
+
+# 3. Train from captured CSI against a room layout (node poses):
+python -m wifi_densepose.rfgs.train \
+    --room-config python/wifi_densepose/rfgs/configs/room.example.toml \
+    --capture-dir ./captures --init pointcloud --steps 2000 --out ./rfgs_out
+#    --backend gsrf-cuda    # opt-in accelerated GSRF CUDA tracer (needs the kernel)
+#    --eval-cloud scan.npy  # report Chamfer distance + occupancy IoU vs a reference
+
+# 4. Serve the baked field to the viewer (v2 splats):
+export RUVIEW_RFGS_FIELD=./rfgs_out/splats_v2.json
+ruview-pointcloud serve --bind 127.0.0.1:9880
+#    GET /api/splats?schema=rfgs-v2  -> anisotropic field (rotation + radiance)
+```
+
+> **Capture format.** RFGS needs *phase*, so it reads the binary ADR-018 I/Q
+> frames (`*.adr018`), not the amplitude-only `.csi.jsonl` recordings (those
+> load as a degraded `phase=None` fallback). See ADR-125 for the data flow.
 
 ### ESP32 Provisioning for CSI
 
