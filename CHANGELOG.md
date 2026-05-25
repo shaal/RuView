@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **RFGS — camera-free room reconstruction via RF Gaussian Splatting (ADR-125, codename RFGS).** New pure-Python package `wifi_densepose.rfgs` that optimizes complex-valued 3D Gaussians whose implied radio radiance field reproduces the CSI measured by the ESP32 mesh — the first *true* camera-free 3D room model in RuView (the existing `to_gaussian_splats` / `gaussian-splats.js` primitives are point-cloud blobs and a heat-map, not a learned radiance field). Foundation: [GSRF](https://github.com/nesl/GSRF) (NeurIPS 2025 Spotlight, **BSD-3-Clause**, native complex-CSI input); [RF-3DGS](https://github.com/SunLab-UGA/RF-3DGS) (Apache-2.0) is the maintained secondary reference / license-clean fallback. First deliverable (P1+P2 reference):
+  - `dataset.py` — CSI→RF-GS data loader: reconstructs **complex** CSI `H[antenna, subcarrier]` from ADR-018 binary I/Q frames (the `.csi.jsonl` recorder is amplitude-only and supported only as a degraded `phase=None` fallback), binds each measurement to TX/RX geometry from a `RoomConfig`.
+  - `geometry.py` — `RoomConfig`/`NodePose`/`Pose`, WiFi channel→subcarrier-frequency mapping.
+  - `model.py` — `ComplexGaussianField` (μ, scale, quaternion, opacity, Fourier–Legendre/SH complex radiance) with random + hybrid (point-cloud) init and 3DGS densify/prune.
+  - `render.py` — pure-PyTorch differentiable CSI forward model (runs with **no CUDA**); GSRF CUDA tracer is an opt-in P3 backend behind the same interface.
+  - `train.py` — optimization loop with amplitude+circular-phase loss, held-out eval, and a `--synthetic` self-test gate (held-out loss must improve ≥50%).
+  - `export.py` — backward-compatible **`splats-v2`** JSON (adds `rotation`+`radiance` to the v1 `/api/splats` shape) and baked `.rfgs.npz` for edge query / WebGPU viewer.
+  - New `rfgs` install extra (`pip install "wifi-densepose[rfgs]"`); DDD model in `docs/ddd/rf-gaussian-splatting-domain-model.md`.
+
 ### Security
 - **ESP32 OTA upload now fails closed when no PSK is provisioned** (#596 audit finding — critical, **breaking change for unprovisioned nodes**). `ota_check_auth()` previously returned `true` when `s_ota_psk[0] == '\0'`, so a freshly-flashed node would accept attacker-controlled firmware over plain HTTP on port 8032 from any host on the WiFi. No Secure Boot V2, no signed-image verification — a single LAN call could brick or backdoor a node. The fix rejects every OTA upload until a PSK is written to NVS (the OTA HTTP server still starts so operators can run `provision.py --ota-psk <hex>` over USB-CDC without reflashing). **Operators affected**: any deployment that relied on the unauthenticated OTA endpoint working out of the box now needs to provision a PSK before subsequent OTA pushes will succeed. Boot-time `ESP_LOGW` makes the new posture visible.
 - **Path-traversal vulnerabilities patched in five sensing-server endpoints** (closes #615 — critical). New `wifi_densepose_sensing_server::path_safety::safe_id()` enforces `[A-Za-z0-9._-]` only (no leading `.`, max 64 chars) before any user-controlled identifier reaches a `format!()` building a filesystem path. Applied at:
