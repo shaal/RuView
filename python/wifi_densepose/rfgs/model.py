@@ -137,13 +137,43 @@ class ComplexGaussianField(nn.Module):
 
     @torch.no_grad()
     def densify_clone(self, grad_norm: Tensor, threshold: float) -> int:
-        """Clone high-gradient Gaussians (under-reconstruction); returns count added."""
-        mask = grad_norm > threshold
+        """Clone high-gradient Gaussians (under-reconstruction); returns count added.
+
+        ``grad_norm`` may be shorter than the current count (an earlier densify
+        step in the same cycle appended children); we only act on the prefix it
+        covers, which keeps clone/split/prune order-independent.
+        """
+        n = min(grad_norm.shape[0], self.num_gaussians)
+        mask = grad_norm[:n] > threshold
         if not mask.any():
             return 0
         idx = mask.nonzero(as_tuple=True)[0]
         self._append(idx)
         return int(idx.numel())
+
+    @torch.no_grad()
+    def densify_split(self, grad_norm: Tensor, threshold: float,
+                      large_scale: float = 0.1) -> int:
+        """Split large, high-gradient Gaussians into two smaller children.
+
+        The 3DGS over-reconstruction remedy (vs. ``densify_clone`` for under-
+        reconstruction): children inherit the parent's attributes at reduced
+        scale, offset along the dominant axis. Returns the number added.
+        """
+        n = min(grad_norm.shape[0], self.num_gaussians)
+        big = self.scales()[:n].max(dim=-1).values > large_scale
+        mask = (grad_norm[:n] > threshold) & big
+        if not mask.any():
+            return 0
+        idx = mask.nonzero(as_tuple=True)[0]
+        offset = torch.randn_like(self.mu[idx]) * self.scales()[idx] * 0.5
+        with torch.no_grad():
+            self.log_scale[idx] -= 0.6931  # ln(2): halve the parent scale
+        self._append(idx)
+        # Nudge the freshly appended children off the parent center.
+        n_added = idx.numel()
+        self.mu.data[-n_added:] += offset
+        return int(n_added)
 
     @torch.no_grad()
     def _reindex(self, idx: Tensor) -> None:

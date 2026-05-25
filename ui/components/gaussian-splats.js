@@ -416,6 +416,88 @@ export class GaussianSplatRenderer {
     }
   }
 
+  // ---- RFGS splats-v2 (ADR-125) ------------------------------------------
+
+  /**
+   * Render a baked RF Gaussian Splatting field (ADR-125 splats-v2). Unlike the
+   * legacy floor-grid field, these are *anisotropic* learned Gaussians with a
+   * per-splat orientation (quaternion) and scale, drawn as instanced ellipsoids
+   * — the camera-free room reconstruction the RF forward model produced.
+   *
+   * @param {object} field - the `/api/splats?schema=rfgs-v2` payload
+   *   `{ schema:'rfgs-v2', count, n_radiance_coeffs, splats:[{center,color,opacity,scale,rotation,radiance}] }`
+   */
+  loadRfgsField(field) {
+    const THREE = this._THREE || window.THREE;
+    if (!THREE || !field || !Array.isArray(field.splats)) return;
+
+    // Replace any previously-loaded field.
+    if (this.rfgsMesh) {
+      this.scene.remove(this.rfgsMesh);
+      this.rfgsMesh.geometry.dispose();
+      this.rfgsMesh.material.dispose();
+      this.rfgsMesh = null;
+    }
+
+    const splats = field.splats;
+    const n = splats.length;
+    if (n === 0) return;
+
+    // Unit sphere instanced and squashed per-splat into an oriented ellipsoid.
+    const geo = new THREE.SphereGeometry(1.0, 8, 8);
+    const mat = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const mesh = new THREE.InstancedMesh(geo, mat, n);
+
+    const m = new THREE.Matrix4();
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scl = new THREE.Vector3();
+    const col = new THREE.Color();
+    const SCALE_GAIN = 3.0; // covariance scales are small (m); exaggerate for visibility
+
+    for (let i = 0; i < n; i++) {
+      const s = splats[i];
+      const c = s.center || [0, 0, 0];
+      const sc = s.scale || [0.05, 0.05, 0.05];
+      const r = s.rotation || [1, 0, 0, 0]; // (w, x, y, z)
+      const rgb = s.color || [0.4, 0.6, 1.0];
+
+      pos.set(c[0], c[1], c[2]);
+      // three.js Quaternion is (x, y, z, w); our export is (w, x, y, z).
+      quat.set(r[1], r[2], r[3], r[0]);
+      scl.set(sc[0] * SCALE_GAIN, sc[1] * SCALE_GAIN, sc[2] * SCALE_GAIN);
+      m.compose(pos, quat, scl);
+      mesh.setMatrixAt(i, m);
+
+      // Premultiply RGB by opacity so per-splat transparency survives a single
+      // global material alpha (InstancedMesh has no per-instance opacity).
+      const a = s.opacity != null ? s.opacity : 1.0;
+      col.setRGB(rgb[0] * a, rgb[1] * a, rgb[2] * a);
+      mesh.setColorAt(i, col);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+
+    this.scene.add(mesh);
+    this.rfgsMesh = mesh;
+  }
+
+  /** Fetch the baked RF field from a sensing server and render it. */
+  async fetchAndRenderRfgs(baseUrl = '') {
+    const res = await fetch(`${baseUrl}/api/splats?schema=rfgs-v2`);
+    const field = await res.json();
+    if (field && field.schema === 'rfgs-v2') {
+      this.loadRfgsField(field);
+      return field.count;
+    }
+    return 0; // server has no baked field; v1 splats path remains active
+  }
+
   // ---- Render loop -------------------------------------------------------
 
   _animate() {
@@ -443,6 +525,12 @@ export class GaussianSplatRenderer {
   dispose() {
     if (this._animFrame) {
       cancelAnimationFrame(this._animFrame);
+    }
+    if (this.rfgsMesh) {
+      this.scene.remove(this.rfgsMesh);
+      this.rfgsMesh.geometry.dispose();
+      this.rfgsMesh.material.dispose();
+      this.rfgsMesh = null;
     }
     this.renderer.dispose();
     if (this.renderer.domElement.parentNode) {

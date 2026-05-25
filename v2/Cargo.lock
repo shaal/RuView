@@ -9373,6 +9373,16 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower-http",
+ "wifi-densepose-rfgs",
+]
+
+[[package]]
+name = "wifi-densepose-rfgs"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

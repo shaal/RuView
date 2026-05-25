@@ -25,10 +25,11 @@ from typing import Optional
 import torch
 
 from .dataset import CsiMeasurement, CsiMeasurementDataset
+from .eval import evaluate_geometry
 from .export import write_baked_npz, write_splats_v2_json
 from .geometry import NodePose, Pose, RoomConfig, subcarrier_frequencies
 from .model import ComplexGaussianField
-from .render import ReferenceTorchTracer, reconstruction_loss
+from .render import ReferenceTorchTracer, make_forward_model, reconstruction_loss
 
 log = logging.getLogger("rfgs.train")
 
@@ -116,6 +117,7 @@ def train(
     densify_every: int = 300,
     holdout: float = 0.15,
     log_every: int = 100,
+    backend: str = "reference",
 ) -> tuple[ComplexGaussianField, dict]:
     room = dataset.room
     if init_points is not None:
@@ -126,7 +128,7 @@ def train(
             n_gaussians, room.bounds_min, room.bounds_max, device=device)
         log.info("random init: %d Gaussians", field.num_gaussians)
 
-    tracer = ReferenceTorchTracer()
+    tracer = make_forward_model(backend)
     train_idx, hold_idx = dataset.split(holdout)
     opt = torch.optim.Adam(field.parameters(), lr=lr)
 
@@ -161,7 +163,9 @@ def train(
 
         if densify_every and step > 0 and step % densify_every == 0:
             removed = field.prune(min_opacity=0.005)
-            added = field.densify_clone(grad_norm, threshold=grad_norm.mean().item() * 2)
+            thr = grad_norm.mean().item() * 2
+            added = field.densify_clone(grad_norm, threshold=thr)
+            added += field.densify_split(grad_norm, threshold=thr)
             if removed or added:
                 opt = torch.optim.Adam(field.parameters(), lr=lr)  # params changed
                 log.info("step %d densify: +%d/-%d -> %d Gaussians",
@@ -199,6 +203,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--device", type=str, default="cpu")
     ap.add_argument("--init", choices=["random", "pointcloud"], default="random")
     ap.add_argument("--cloud-url", type=str, default="http://127.0.0.1:9880/api/cloud")
+    ap.add_argument("--backend", choices=["reference", "gsrf-cuda"], default="reference",
+                    help="CSI forward-model backend (gsrf-cuda needs the GSRF kernel)")
+    ap.add_argument("--eval-cloud", type=str,
+                    help="reference point cloud (.npy [N,3]) for Chamfer/IoU eval (AC5)")
     ap.add_argument("--out", type=str, default="./rfgs_out")
     args = ap.parse_args(argv)
 
@@ -206,12 +214,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     t0 = time.time()
 
     synthetic_points = None
+    eval_reference = None
     if args.synthetic:
         room = _synthetic_room()
-        dataset, synthetic_points = _synthetic_dataset(room, device=args.device)
+        dataset, gt_means = _synthetic_dataset(room, device=args.device)
+        eval_reference = gt_means.clone()  # true geometry = the "reference scan"
         # Seed positions from the (synthetic) point cloud with jitter -> hybrid
         # init (F3/AC6). The optimizer then recovers the complex radiance.
-        synthetic_points = synthetic_points + 0.05 * torch.randn_like(synthetic_points)
+        synthetic_points = gt_means + 0.05 * torch.randn_like(gt_means)
         log.info("synthetic dataset: %d measurements", len(dataset))
     else:
         if not (args.room_config and args.capture_dir):
@@ -227,7 +237,18 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     field, history = train(
         dataset, steps=args.steps, n_gaussians=args.gaussians, lr=args.lr,
-        device=args.device, init_points=init_points)
+        device=args.device, init_points=init_points, backend=args.backend)
+
+    # Geometry evaluation vs. a reference scan (AC5).
+    if args.eval_cloud:
+        import numpy as np
+        eval_reference = torch.tensor(np.load(args.eval_cloud), dtype=torch.float32)
+    if eval_reference is not None:
+        report = evaluate_geometry(field, eval_reference)
+        history["geometry"] = report.as_dict()
+        log.info("geometry eval: chamfer=%.4f m  IoU=%.3f  (%d field / %d ref pts)",
+                 report.chamfer_m, report.occupancy_iou,
+                 report.n_field_points, report.n_reference_points)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

@@ -96,6 +96,48 @@ class ReferenceTorchTracer(CsiForwardModel):
         return contrib.sum(-1)                               # [A,S] complex
 
 
+class GsrfCudaTracer(CsiForwardModel):
+    """Opt-in accelerated backend (ADR-125 P3) wrapping GSRF's CUDA tracer.
+
+    GSRF (BSD-3-Clause) ships a ``complex_gaussian_tracer_csi`` CUDA extension
+    that performs the true wavefront-propagation tracing the pure-PyTorch
+    ``ReferenceTorchTracer`` only approximates -- and, unlike the reference, it
+    makes Gaussian *position* gradients tractable (the hard inverse problem).
+
+    It is not vendored: building it needs CUDA 12.1 + the GSRF kernel sources.
+    This adapter lazily imports it so the package installs and runs without
+    CUDA; constructing it without the kernel raises a clear, actionable error.
+    """
+
+    def __init__(self) -> None:
+        try:
+            import complex_gaussian_tracer_csi as _kernel  # type: ignore
+        except ImportError as e:  # pragma: no cover - requires CUDA build
+            raise ImportError(
+                "GsrfCudaTracer requires the GSRF CUDA extension "
+                "'complex_gaussian_tracer_csi'. Build it from "
+                "https://github.com/nesl/GSRF (BSD-3-Clause, CUDA 12.1), then "
+                "re-run with --backend gsrf-cuda. Falls back to the pure-PyTorch "
+                "ReferenceTorchTracer (--backend reference) otherwise."
+            ) from e
+        self._kernel = _kernel
+
+    def render(self, field, tx_position, rx_position, freqs_hz, n_antennas):  # pragma: no cover
+        return self._kernel.trace_csi(
+            field.mu, field.covariance(), field.opacities(),
+            field.radiance_complex(), tx_position, rx_position, freqs_hz, n_antennas,
+        )
+
+
+def make_forward_model(backend: str = "reference") -> CsiForwardModel:
+    """Factory selecting a forward-model backend (DDD anti-corruption layer)."""
+    if backend == "reference":
+        return ReferenceTorchTracer()
+    if backend == "gsrf-cuda":
+        return GsrfCudaTracer()
+    raise ValueError(f"unknown forward-model backend: {backend!r}")
+
+
 def reconstruction_loss(
     h_pred: Tensor,     # complex [A,S]
     h_meas: Tensor,     # complex [A,S]
